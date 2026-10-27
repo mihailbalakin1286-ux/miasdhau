@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RemoteControl Web — просмотр экрана</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,Arial;background:#0c1020;color:#f4f5ff}
+*{box-sizing:border-box}body{margin:0}main{max-width:1050px;margin:auto;padding:30px 20px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px}h1{font-size:28px}h1 span{color:#9b8aff}
+.badge{background:#202946;padding:10px 14px;border-radius:30px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{background:#171d33;border:1px solid #323b5d;border-radius:18px;padding:25px;margin:15px 0}
+h2{margin-top:0}p{color:#c0c7e4;line-height:1.55}.id{font-size:32px;font-weight:800;letter-spacing:3px;margin:20px 0}
+button{border:0;background:#7161f3;color:white;font-weight:700;padding:13px 18px;border-radius:10px;cursor:pointer;margin:3px}
+button:disabled{opacity:.45;cursor:not-allowed}.stop{background:#c94c6d}
+input{width:100%;background:#0d1429;border:1px solid #4b5576;border-radius:10px;color:white;font-size:19px;padding:13px;margin:8px 0 14px}
+video{width:100%;background:#080b14;border-radius:14px;max-height:65vh;min-height:200px}
+#notice{white-space:pre-wrap;color:#b9c8ff}#request{display:none;border:1px solid #8b7aff;padding:14px;border-radius:12px;margin-top:12px}
+small{color:#a9b1d3}@media(max-width:680px){.grid{grid-template-columns:1fr}.id{font-size:25px}header{flex-wrap:wrap}}
+</style></head>
+<body><main><header><h1>◉ RemoteControl <span>Web</span></h1><div class="badge">👁️ Только просмотр</div></header>
+<div class="grid">
+<section class="card"><h2>🖥️ Показать свой экран</h2><p>Передай другу этот ID. Начало показа возможно только после твоего подтверждения и выбора экрана в браузере.</p>
+<div class="id" id="myId">Подключение…</div><button id="copy">Копировать ID</button>
+<div id="request"><p id="requestText"></p><button id="accept">Разрешить просмотр</button><button class="stop" id="deny">Отклонить</button></div></section>
+<section class="card"><h2>👁️ Смотреть экран друга</h2><p>Введи ID друга. Ему придёт запрос на просмотр.</p><input id="friend" maxlength="11" inputmode="numeric" placeholder="123 456 789">
+<button id="connect">Запросить просмотр</button><button id="disconnect" class="stop">Отключиться</button></section></div>
+<section class="card"><h2>📺 Экран</h2><video id="video" autoplay playsinline controls muted></video>
+<p id="notice">Подключаемся к серверу…</p><small>Приложение не управляет мышью и клавиатурой. Владелец экрана может остановить показ в любой момент через браузер.</small></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let id='',token='',pc=null,stream=null,peerId='',pending='',polling=false,connected=false;
+const cfg={iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+function status(t){$('notice').textContent=t}
+function fmt(v){return v.replace(/(\d{3})(\d{3})(\d{3})/,'$1 $2 $3')}
+async function api(action,body={}){
+ const r=await fetch('/api/signal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,id,token,...body})});
+ const d=await r.json();if(!r.ok)throw Error(d.error||'Ошибка сервера');return d;
+}
+function closePeer(){
+ if(pc){pc.close();pc=null}
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+ $('video').srcObject=null;peerId='';connected=false;
+}
+async function send(to,type,payload={}){return api('send',{to,type,payload})}
+async function endSession(notify=true){
+ const other=peerId;closePeer();pending='';$('request').style.display='none';
+ if(notify&&other)try{await send(other,'stop')}catch(e){}
+ status('Сеанс завершён.');
+}
+function createPeer(other){
+ if(pc)pc.close();pc=new RTCPeerConnection(cfg);peerId=other;
+ pc.onicecandidate=e=>{if(e.candidate)send(other,'ice',e.candidate.toJSON()).catch(console.error)};
+ pc.ontrack=e=>{$('video').srcObject=e.streams[0];$('video').muted=true;status('● Вы смотрите экран друга')};
+ pc.onconnectionstatechange=()=>{
+  if(pc&&['failed','disconnected'].includes(pc.connectionState))status('Соединение потеряно. Возможно, нужен TURN-сервер.');
+ };
+ return pc;
+}
+async function handle(m){
+ const from=m.from, p=m.payload||{};
+ if(m.type==='request'){
+  if(peerId||pending){await send(from,'decline');return}
+  pending=from;$('requestText').textContent='Пользователь '+fmt(from)+' просит показать ваш экран.';
+  $('request').style.display='block';status('Получен запрос на просмотр.');return;
+ }
+ if(m.type==='decline'&&from===peerId){await endSession(false);status('Друг отклонил запрос.');return}
+ if(m.type==='accept'&&from===peerId){status('Друг разрешил показ, ожидаем видео…');return}
+ if(m.type==='offer'&&from===peerId){
+  const c=createPeer(from);await c.setRemoteDescription(p);
+  const answer=await c.createAnswer();await c.setLocalDescription(answer);await send(from,'answer',c.localDescription.toJSON());return;
+ }
+ if(m.type==='answer'&&pc&&from===peerId){await pc.setRemoteDescription(p);return}
+ if(m.type==='ice'&&pc&&from===peerId){try{await pc.addIceCandidate(p)}catch(e){console.warn(e)}return}
+ if(m.type==='stop'&&from===peerId){await endSession(false);status('Друг завершил показ.')}
+}
+async function poll(){
+ if(polling)return;polling=true;
+ while(true){
+  try{
+   await api('heartbeat');
+   for(let i=0;i<20;i++){const r=await api('poll');if(!r.message)break;await handle(r.message)}
+  }catch(e){status('Ошибка связи: '+e.message)}
+  await new Promise(r=>setTimeout(r,1300));
+ }
+}
+async function init(){
+ id=String(Math.floor(100000000+Math.random()*900000000));
+ token=Array.from(crypto.getRandomValues(new Uint8Array(24)),x=>x.toString(16).padStart(2,'0')).join('');
+ try{await api('register');$('myId').textContent=fmt(id);status('Готово. Передайте ID другу.');poll()}catch(e){status('Ошибка регистрации: '+e.message)}
+}
+$('copy').onclick=()=>navigator.clipboard.writeText(id);
+$('connect').onclick=async()=>{
+ const to=$('friend').value.replace(/\D/g,'');
+ if(!/^\d{9}$/.test(to)||to===id){status('Введите корректный ID друга.');return}
+ if(peerId||pending){status('Сначала завершите текущий сеанс.');return}
+ try{peerId=to;await send(to,'request');status('Запрос отправлен. Ожидаем подтверждение друга…')}
+ catch(e){peerId='';status('Не удалось отправить запрос: '+e.message)}
+};
+$('accept').onclick=async()=>{
+ const to=pending;pending='';$('request').style.display='none';
+ if(!to)return;
+ try{
+  stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+  const c=createPeer(to);
+  stream.getTracks().forEach(t=>c.addTrack(t,stream));
+  stream.getVideoTracks()[0].addEventListener('ended',()=>endSession());
+  $('video').srcObject=stream;
+  await send(to,'accept');
+  const offer=await c.createOffer();await c.setLocalDescription(offer);await send(to,'offer',c.localDescription.toJSON());
+  status('● Вы показываете экран другу');
+ }catch(e){closePeer();await send(to,'decline').catch(()=>{});status('Показ отменён: '+e.message)}
+};
+$('deny').onclick=async()=>{const to=pending;pending='';$('request').style.display='none';if(to)await send(to,'decline');status('Запрос отклонён.')};
+$('disconnect').onclick=()=>endSession();
+window.addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(t=>t.stop())});
+init();
+</script></body></html>
