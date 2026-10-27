@@ -18,10 +18,10 @@ small{color:#a9b1d3}@media(max-width:680px){.grid{grid-template-columns:1fr}.id{
 <body><main><header><h1>◉ RemoteControl <span>Web</span></h1><div class="badge">👁️ Только просмотр</div></header>
 <div class="grid">
 <section class="card"><h2>🖥️ Показать свой экран</h2><p>Передай другу этот ID. Начало показа возможно только после твоего подтверждения и выбора экрана в браузере.</p>
-<div class="id" id="myId">Подключение…</div><button id="copy">Копировать ID</button>
+<div class="id" id="myId">Подключение…</div><small>Это ваш ID. Друг должен вводить его у себя.</small><br><button id="copy">Копировать ID</button>
 <div id="request"><p id="requestText"></p><button id="accept">Разрешить просмотр</button><button class="stop" id="deny">Отклонить</button></div></section>
 <section class="card"><h2>👁️ Смотреть экран друга</h2><p>Введи ID друга. Ему придёт запрос на просмотр.</p><input id="friend" maxlength="11" inputmode="numeric" placeholder="123 456 789">
-<button id="connect">Запросить просмотр</button><button id="disconnect" class="stop">Отключиться</button></section></div>
+<button id="connect">Запросить просмотр</button><p><small>Для проверки откройте сайт на двух устройствах. Вводите ID другого устройства, не свой.</small></p><button id="disconnect" class="stop">Отключиться</button></section></div>
 <section class="card"><h2>📺 Экран</h2><video id="video" autoplay playsinline controls muted></video>
 <p id="notice">Подключаемся к серверу…</p><small>Приложение не управляет мышью и клавиатурой. Владелец экрана может остановить показ в любой момент через браузер.</small></section>
 </main>
@@ -89,8 +89,9 @@ async function init(){
 }
 $('copy').onclick=()=>navigator.clipboard.writeText(id);
 $('connect').onclick=async()=>{
- const to=$('friend').value.replace(/\D/g,'');
- if(!/^\d{9}$/.test(to)||to===id){status('Введите корректный ID друга.');return}
+ const to=$('friend').value.replace(/[^0-9]/g,'');
+ if(!/^\d{9}$/.test(to)){status('ID должен состоять из 9 цифр. Сейчас введено: '+to.length+'.');return}
+ if(to===id){status('Это ваш собственный ID. Попросите друга прислать его ID с другого устройства.');return}
  if(peerId||pending){status('Сначала завершите текущий сеанс.');return}
  try{peerId=to;await send(to,'request');status('Запрос отправлен. Ожидаем подтверждение друга…')}
  catch(e){peerId='';status('Не удалось отправить запрос: '+e.message)}
